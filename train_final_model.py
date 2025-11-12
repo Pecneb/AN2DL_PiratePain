@@ -41,7 +41,7 @@ torch.manual_seed(SEED)
 def load_and_preprocess_data(
     train_path: str = "./data/pirate_pain_train.csv",
     labels_path: str = "./data/pirate_pain_train_labels.csv",
-    scaling: str = "extra",
+    n_features: int = 20
 ):
     """
     Load and preprocess the full training dataset.
@@ -77,7 +77,7 @@ def load_and_preprocess_data(
     train_df = identify_pirate(train_df)
 
     # Create and fit selector
-    selector = VarianceFeatureSelector(n_features=20)
+    selector = VarianceFeatureSelector(n_features=n_features)
     train_df = selector.fit_transform(train_df)
 
     # Encode labels
@@ -168,7 +168,7 @@ def train_final_model(
     max_epochs: int = 100,
     patience: int = 15,
     min_delta: int = 0,
-    scaling: str = "extra",
+    n_features: int = 20,
     output_dir: str = "./final_model",
 ):
     """
@@ -195,7 +195,7 @@ def train_final_model(
     print()
 
     # Load and preprocess data
-    X, y, selector = load_and_preprocess_data(scaling=scaling)
+    X, y, selector = load_and_preprocess_data(n_features=n_features)
 
     # Get batch size from config (if available)
     batch_size = config.pop("batch_size", 32)
@@ -332,12 +332,18 @@ def main():
         default=0,
         help="Early stopping delta loss parameter.",
     )
+    # parser.add_argument(
+    #     "--scaling",
+    #     type=str,
+    #     default="extra",
+    #     choices=["inter", "extra", "hybrid"],
+    #     help="Scaling method",
+    # )
     parser.add_argument(
-        "--scaling",
-        type=str,
-        default="extra",
-        choices=["inter", "extra", "hybrid"],
-        help="Scaling method",
+        "--n_features",
+        type=int,
+        default=20,
+        help="Variance based feature selection parameter, this defines the number of features to be kept from the joint_ features."
     )
     parser.add_argument(
         "--output_dir",
@@ -361,7 +367,7 @@ def main():
         max_epochs=args.max_epochs,
         patience=args.patience,
         min_delta=args.min_delta,
-        scaling=args.scaling,
+        n_features=args.n_features,
         output_dir=args.output_dir,
     )
 

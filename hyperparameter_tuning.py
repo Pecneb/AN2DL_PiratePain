@@ -87,6 +87,157 @@ class FocalLoss(nn.Module):
 
 
 # ============================================================================
+# Feature Engineering Functions
+# ============================================================================
+
+
+class VarianceFeatureSelector:
+    """
+    Select top N features by variance and apply consistently in training/inference.
+    """
+
+    def __init__(self, n_features=20):
+        self.n_features = n_features
+        self.scaler = StandardScaler()
+        self.selected_features = None
+        self.variance_info = None
+        self.all_joint_cols = None
+
+    def fit(self, df, joint_cols=None) -> pd.DataFrame:
+        """
+        Fit scaler and select top variance features from training data.
+
+        Args:
+            df: Training DataFrame
+            joint_cols: List of joint column names (auto-detected if None)
+
+        Returns:
+            df_transformed: DataFrame with selected features
+        """
+        # Auto-detect joint columns if not provided
+        if joint_cols is None:
+            joint_cols = [col for col in df.columns if col.startswith("joint_")]
+
+        self.all_joint_cols = joint_cols
+
+        print(f"Fitting on {len(joint_cols)} joint features...")
+
+        # Step 1: Fit scaler and transform
+        df_scaled = pd.DataFrame(
+            self.scaler.fit_transform(df[joint_cols]),
+            columns=joint_cols,
+            index=df.index,
+        )
+
+        # Step 2: Calculate variance
+        variances = df_scaled.var(axis=0)
+
+        self.variance_info = pd.DataFrame(
+            {"feature": joint_cols, "variance": variances}
+        ).sort_values("variance", ascending=False)
+
+        # Step 3: Select top N
+        self.selected_features = self.variance_info.head(self.n_features)[
+            "feature"
+        ].tolist()
+
+        print(f"\n✅ Selected top {self.n_features} features:")
+        print(self.variance_info.head(self.n_features))
+        print(
+            f"\nTotal variance captured: {self.variance_info.head(self.n_features)['variance'].sum():.4f}"
+        )
+        print(
+            f"% of total variance: {self.variance_info.head(self.n_features)['variance'].sum() / variances.sum() * 100:.2f}%"
+        )
+
+        # Return transformed data with selected features
+        return self._transform_helper(df, df_scaled)
+
+    def transform(self, df) -> pd.DataFrame:
+        """
+        Transform new data using fitted scaler and selected features.
+
+        Args:
+            df: Test DataFrame
+
+        Returns:
+            df_transformed: DataFrame with selected features
+        """
+        if self.selected_features is None:
+            raise ValueError("Must call fit() before transform()")
+
+        # Verify joint columns exist
+        joint_cols = [col for col in df.columns if col.startswith("joint_")]
+        missing = set(self.all_joint_cols) - set(joint_cols)
+        if missing:
+            raise ValueError(f"Missing joint columns in test data: {missing}")
+
+        # Scale using fitted scaler
+        df_scaled = pd.DataFrame(
+            self.scaler.transform(df[self.all_joint_cols]),
+            columns=self.all_joint_cols,
+            index=df.index,
+        )
+
+        # Select features
+        return self._transform_helper(df, df_scaled)
+
+    def _transform_helper(self, df_original, df_scaled) -> pd.DataFrame:
+        """Helper to create output DataFrame with selected features."""
+        # Start with metadata columns
+        meta_cols = ["sample_index", "time"]
+        df_out = df_original[
+            [col for col in meta_cols if col in df_original.columns]
+        ].copy()
+
+        # Add selected features
+        df_out[self.selected_features] = df_scaled[self.selected_features]
+
+        # Add other columns (label, is_pirate, etc.)
+        other_cols = [
+            col
+            for col in df_original.columns
+            if col not in meta_cols and col not in self.all_joint_cols
+        ]
+        for col in other_cols:
+            df_out[col] = df_original[col]
+
+        return df_out
+
+    def fit_transform(self, df, joint_cols=None) -> pd.DataFrame:
+        """Fit and transform in one step."""
+        return self.fit(df, joint_cols)
+
+    def save(self, path):
+        """Save selector artifacts."""
+        os.makedirs(path, exist_ok=True)
+        joblib.dump(self.scaler, f"{path}/scaler.pkl")
+        joblib.dump(self.selected_features, f"{path}/selected_features.pkl")
+        joblib.dump(self.variance_info, f"{path}/variance_info.pkl")
+        joblib.dump(self.all_joint_cols, f"{path}/all_joint_cols.pkl")
+        joblib.dump(self.n_features, f"{path}/n_features.pkl")
+        print(f"✅ Saved selector to {path}/")
+
+    def load(self, path):
+        """Load selector artifacts."""
+        self.scaler = joblib.load(f"{path}/scaler.pkl")
+        self.selected_features = joblib.load(f"{path}/selected_features.pkl")
+        self.variance_info = joblib.load(f"{path}/variance_info.pkl")
+        self.all_joint_cols = joblib.load(f"{path}/all_joint_cols.pkl")
+        self.n_features = joblib.load(f"{path}/n_features.pkl")
+        print(f"✅ Loaded selector from {path}/")
+        print(f"   Features: {self.n_features}, Selected: {self.selected_features}")
+
+    def get_feature_names(self):
+        """Get selected feature names."""
+        return self.selected_features
+
+    def get_variance_report(self):
+        """Get detailed variance report."""
+        return self.variance_info
+
+
+# ============================================================================
 # Data Processing Functions
 # ============================================================================
 
@@ -222,29 +373,30 @@ def scale_dataset(
     return _df, scaler
 
 
-def encode_labels(label_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
+def encode_labels(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
     """Encode string labels to integers and return mapping."""
-    _label_df = label_df.copy()
-    labels = sorted(label_df["label"].unique())
+    _df = df.copy()
+    labels = sorted(_df["label"].unique())
     label_encoding = {label: i for i, label in enumerate(labels)}
-    _label_df["label"] = _label_df["label"].map(label_encoding)
-    return _label_df, label_encoding
+    _df["label"] = _df["label"].map(label_encoding)
+    return _df, label_encoding
 
 
-def build_sequences(
-    df: pd.DataFrame, labels_df: pd.DataFrame
-) -> Tuple[np.ndarray, np.ndarray]:
+def build_sequences(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     """Build sequences from dataframe, dropping metadata columns."""
     dataset = []
     labels = []
 
+    _labels = df[["sample_index", "label"]]
+    _dataset = df.drop(columns=["label"])
+
     for idx in df["sample_index"].unique():
         person_ds = (
-            df[df["sample_index"] == idx]
+            _dataset[_dataset["sample_index"] == idx]
             .drop(columns=["sample_index", "time"])
             .to_numpy()
         )
-        person_label = labels_df[labels_df["sample_index"] == idx]["label"].values[0]
+        person_label = _labels[_labels["sample_index"] == idx]["label"].values[0]
         dataset.append(person_ds)
         labels.append(person_label)
 
@@ -930,12 +1082,18 @@ def main():
     parser.add_argument(
         "--patience", type=int, default=10, help="Early stopping patience"
     )
+    # parser.add_argument(
+    #     "--scaling",
+    #     type=str,
+    #     default="extra",
+    #     choices=["inter", "extra", "hybrid"],
+    #     help="Scaling method",
+    # )
     parser.add_argument(
-        "--scaling",
-        type=str,
-        default="extra",
-        choices=["inter", "extra", "hybrid"],
-        help="Scaling method",
+        "--top_n_features",
+        type=int,
+        default=20,
+        help="Select top n features for training",
     )
     parser.add_argument(
         "--save_dir", type=str, default="./lightning_logs_tuning", help="Save directory"
@@ -962,7 +1120,7 @@ def main():
     print(f"K-Folds: {args.k_folds}")
     print(f"Max Epochs: {args.epochs}")
     print(f"Patience: {args.patience}")
-    print(f"Scaling: {args.scaling}")
+    # print(f"Scaling: {args.scaling}")
     print(f"{'='*80}\n")
 
     # Load data
@@ -970,23 +1128,34 @@ def main():
     train_path = os.path.join(args.data_dir, "pirate_pain_train.csv")
     labels_path = os.path.join(args.data_dir, "pirate_pain_train_labels.csv")
 
-    df = pd.read_csv(train_path)
+    train_df = pd.read_csv(train_path)
     labels_df = pd.read_csv(labels_path)
-    print(f"✓ Loaded {len(df['sample_index'].unique())} samples")
+    train_df = train_df.merge(labels_df, on="sample_index", how="left")
+    print(f"✓ Loaded {len(train_df['sample_index'].unique())} samples")
 
+    # ===========
     # Preprocess
+    # ===========
     print("Preprocessing...")
-    # df = parse_body_parts(df)
-    df = identify_pirate(df)
-    df, scaler = scale_dataset(df, method=args.scaling)
-    labels_df_encoded, label_encoding = encode_labels(labels_df)
+    train_df = identify_pirate(train_df)
+
+    # Create and fit selector
+    selector = VarianceFeatureSelector(n_features=20)
+    train_df_processed = selector.fit_transform(train_df)
+
+    print(f"Original: {train_df.shape}")
+    print(f"Processed: {train_df_processed.shape}")
+    print(f"Selected features: {selector.get_feature_names()}")
+
+    # Encode labels
+    train_df_processed, _ = encode_labels(train_df_processed)
 
     # Save scaler to output directory
-    
+    selector.save(Path(args.save_dir) / "variance_selector")
 
     # Build sequences
     print("Building sequences...")
-    X, y = build_sequences(df, labels_df_encoded)
+    X, y = build_sequences(train_df_processed)
     print(f"✓ Sequences shape: {X.shape}")
     print(f"✓ Labels shape: {y.shape}")
     print(f"✓ Number of classes: {len(np.unique(y))}")
@@ -1038,7 +1207,8 @@ def main():
             patience=args.patience,
             save_dir=args.save_dir,
             results_file=args.results_file,
-            study_name=f"pirate_pain_{args.scaling}",
+            # study_name=f"pirate_pain_{args.scaling}",
+            study_name=f"pirate_pain_{args.top_n_features}"
         )
 
         # Print additional Optuna stats

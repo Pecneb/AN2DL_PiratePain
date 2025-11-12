@@ -22,7 +22,7 @@ from sklearn.preprocessing import StandardScaler
 import pytorch_lightning as pl
 
 # Import the model from hyperparameter_tuning script
-from hyperparameter_tuning import RecurrentClassifierPL, parse_body_parts, SEED
+from hyperparameter_tuning import RecurrentClassifierPL, VarianceFeatureSelector, parse_body_parts, identify_pirate, SEED
 
 # Set seeds
 pl.seed_everything(SEED, workers=True)
@@ -32,8 +32,8 @@ torch.manual_seed(SEED)
 
 def load_and_preprocess_test_data(
     test_path: str,
-    scaler_path: str = None,
-    scaling: str = 'extra'
+    selector_path: str,
+    n_features: int,
 ):
     """
     Load and preprocess test data.
@@ -59,16 +59,31 @@ def load_and_preprocess_test_data(
     # for col in ['n_legs', 'n_eyes', 'n_hands']:
     #     if col in test_df.columns:
     #         test_df[col] = test_df[col].apply(parse_body_parts)
-    test_df = parse_body_parts(test_df)
+    # test_df = parse_body_parts(test_df)
+    test_df = identify_pirate(test_df)
+
+    # load and use variance based feature selector
+    selector_loaded = VarianceFeatureSelector(n_features=n_features)
+    selector_loaded.load(selector_path)
+
+    test_df_processed = selector_loaded.transform(test_df)
+
+    print(f"\nTest original: {test_df.shape}")
+    print(f"Test processed: {test_df_processed.shape}")
+
+    # View variance report
+    print("\nVariance Report:")
+    print(selector_loaded.get_variance_report().head(20))
     
     # Get unique samples
-    sample_indices = test_df['sample_index'].unique()
+    sample_indices = test_df_processed['sample_index'].unique()
     print(f"✓ Found {len(sample_indices)} test samples")
     
     # Features to use
-    joint_cols = [col for col in test_df.columns if col.startswith('joint_')]
-    bodypart_cols = ['n_legs', 'n_eyes', 'n_hands']
-    feature_cols = joint_cols + bodypart_cols
+    joint_cols = [col for col in test_df_processed.columns if col.startswith('joint_')]
+    bodypart_cols = ["is_pirate"] # ['n_legs', 'n_eyes', 'n_hands']
+    pain_survey_cols = [col for col in test_df_processed.columns if col.startswith("pain_survey_")]
+    feature_cols = joint_cols + bodypart_cols + pain_survey_cols
     
     print(f"✓ Using {len(feature_cols)} features")
     
@@ -77,7 +92,7 @@ def load_and_preprocess_test_data(
     indices = []
     
     for sample_idx in sample_indices:
-        sample_data = test_df[test_df['sample_index'] == sample_idx]
+        sample_data = test_df_processed[test_df_processed['sample_index'] == sample_idx]
         
         # Extract sequence
         seq = sample_data[feature_cols].values
@@ -90,60 +105,60 @@ def load_and_preprocess_test_data(
     print(f"✓ Test sequences shape: {X.shape}")
     
     # Scale data
-    print(f"\nScaling method: {scaling}")
+    # print(f"\nScaling method: {scaling}")
     
-    if scaling == 'inter':
-        # Scale each sample independently (no saved scaler needed)
-        for i in range(len(X)):
-            scaler = StandardScaler()
-            X[i] = scaler.fit_transform(X[i])
-        print("✓ Applied inter-sample scaling")
+    # if scaling == 'inter':
+    #     # Scale each sample independently (no saved scaler needed)
+    #     for i in range(len(X)):
+    #         scaler = StandardScaler()
+    #         X[i] = scaler.fit_transform(X[i])
+    #     print("✓ Applied inter-sample scaling")
         
-    elif scaling == 'extra':
-        # Load and apply global scaler
-        if scaler_path and os.path.exists(scaler_path):
-            with open(scaler_path, 'rb') as f:
-                scaler = pickle.load(f)
-            print(f"✓ Loaded scaler from: {scaler_path}")
+    # elif scaling == 'extra':
+    #     # Load and apply global scaler
+    #     if scaler_path and os.path.exists(scaler_path):
+    #         with open(scaler_path, 'rb') as f:
+    #             scaler = pickle.load(f)
+    #         print(f"✓ Loaded scaler from: {scaler_path}")
             
-            n_samples, seq_len, n_features = X.shape
-            X_flat = X.reshape(-1, n_features)
-            X_flat = scaler.transform(X_flat)
-            X = X_flat.reshape(n_samples, seq_len, n_features)
-            print("✓ Applied global scaling")
-        else:
-            print(f"⚠️  Warning: Scaler not found at {scaler_path}")
-            print("   Fitting new scaler on test data (not recommended)")
-            n_samples, seq_len, n_features = X.shape
-            X_flat = X.reshape(-1, n_features)
-            scaler = StandardScaler()
-            X_flat = scaler.fit_transform(X_flat)
-            X = X_flat.reshape(n_samples, seq_len, n_features)
+    #         n_samples, seq_len, n_features = X.shape
+    #         X_flat = X.reshape(-1, n_features)
+    #         X_flat = scaler.transform(X_flat)
+    #         X = X_flat.reshape(n_samples, seq_len, n_features)
+    #         print("✓ Applied global scaling")
+    #     else:
+    #         print(f"⚠️  Warning: Scaler not found at {scaler_path}")
+    #         print("   Fitting new scaler on test data (not recommended)")
+    #         n_samples, seq_len, n_features = X.shape
+    #         X_flat = X.reshape(-1, n_features)
+    #         scaler = StandardScaler()
+    #         X_flat = scaler.fit_transform(X_flat)
+    #         X = X_flat.reshape(n_samples, seq_len, n_features)
         
-    elif scaling == 'hybrid':
-        # Load global scaler for joints, per-sample for body parts
-        if scaler_path and os.path.exists(scaler_path):
-            with open(scaler_path, 'rb') as f:
-                scaler = pickle.load(f)
-            print(f"✓ Loaded scaler from: {scaler_path}")
+    # elif scaling == 'hybrid':
+    #     # Load global scaler for joints, per-sample for body parts
+    #     if scaler_path and os.path.exists(scaler_path):
+    #         with open(scaler_path, 'rb') as f:
+    #             scaler = pickle.load(f)
+    #         print(f"✓ Loaded scaler from: {scaler_path}")
             
-            n_samples, seq_len, n_features = X.shape
-            n_joint_features = len(joint_cols)
+    #         n_samples, seq_len, n_features = X.shape
+    #         n_joint_features = len(joint_cols)
             
-            # Scale joints with loaded scaler
-            X_joints = X[:, :, :n_joint_features].reshape(-1, n_joint_features)
-            X_joints = scaler.transform(X_joints)
-            X[:, :, :n_joint_features] = X_joints.reshape(n_samples, seq_len, n_joint_features)
+    #         # Scale joints with loaded scaler
+    #         X_joints = X[:, :, :n_joint_features].reshape(-1, n_joint_features)
+    #         X_joints = scaler.transform(X_joints)
+    #         X[:, :, :n_joint_features] = X_joints.reshape(n_samples, seq_len, n_joint_features)
             
-            # Scale body parts per-sample
-            for i in range(n_samples):
-                body_scaler = StandardScaler()
-                X[i, :, n_joint_features:] = body_scaler.fit_transform(X[i, :, n_joint_features:])
+    #         # Scale body parts per-sample
+    #         for i in range(n_samples):
+    #             body_scaler = StandardScaler()
+    #             X[i, :, n_joint_features:] = body_scaler.fit_transform(X[i, :, n_joint_features:])
             
-            print("✓ Applied hybrid scaling")
-        else:
-            print(f"⚠️  Warning: Scaler not found at {scaler_path}")
-            print("   Proceeding without proper scaling")
+    #         print("✓ Applied hybrid scaling")
+    #     else:
+    #         print(f"⚠️  Warning: Scaler not found at {scaler_path}")
+    #         print("   Proceeding without proper scaling")
     
     print("="*80 + "\n")
     
@@ -172,18 +187,19 @@ def predict(
     print("="*80)
     
     # Load training info if available
-    scaling = 'extra'  # Default
-    scaler_path = None
+    selector_path = None
     
     if info_path and os.path.exists(info_path):
         with open(info_path, 'r') as f:
             info = json.load(f)
-        scaling = info.get('scaling', 'extra')
-        scaler_path = os.path.join(os.path.dirname(model_path), 'scaler.pkl')
+        n_features = info.get("n_features", 20)
+        feature_names = info.get("feature_names", [])
+        selector_path = os.path.dirname(model_path)
         print(f"✓ Loaded training info from: {info_path}")
-        print(f"  Scaling method: {scaling}")
+        print(f"  N features used: {20}")
+        print(f" Feature names: {feature_names}")
     else:
-        print(f"⚠️  Training info not found, using default scaling: {scaling}")
+        raise FileNotFoundError(f"Training info file {info_path} is not found!")
     
     # Load model
     print(f"\nLoading model from: {model_path}")
@@ -198,8 +214,8 @@ def predict(
     # Load and preprocess test data
     X_test, sample_indices = load_and_preprocess_test_data(
         test_path=test_path,
-        scaler_path=scaler_path,
-        scaling=scaling
+        selector_path=selector_path,
+        n_features=n_features
     )
     
     # Create dataloader

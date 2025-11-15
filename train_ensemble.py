@@ -297,7 +297,7 @@ def train_final_model(model, X: pd.DataFrame, y: np.ndarray,
     
     # Pretty print confusion matrix
     print("\nConfusion Matrix (labeled):")
-    print(f"{'True \\ Pred':<15}", end='')
+    print(f"{'True / Pred':<15}", end='')
     for class_name in label_encoder.classes_:
         print(f"{class_name:<15}", end='')
     print()

@@ -85,6 +85,7 @@ After completion, you'll have:
 - `./hyperparameter_search_results.csv` - All trial results
 - `./lightning_logs_tuning/*.html` - Interactive visualizations
 - `./lightning_logs_tuning/` - TensorBoard logs
+- `./lightning_logs_tuning/variance_selector` - Feature engineering metadata and scaler model
 
 ### View Best Configuration
 ```bash
@@ -117,7 +118,6 @@ Train a model on the **full training dataset** using the best hyperparameters.
     --config ./lightning_logs_tuning/best_config_optuna.json \
     --max_epochs 100 \
     --patience 15 \
-    --scaling extra
 ```
 
 ### Options

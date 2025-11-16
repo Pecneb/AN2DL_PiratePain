@@ -1,0 +1,183 @@
+\documentclass[10pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{multicol}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{enumitem}
+\setlist{noitemsep,topsep=2pt}
+\newcolumntype{Y}{>{\centering\arraybackslash}X}
+\usepackage[left=1.5cm, right=1.5cm, top=1.5cm, bottom=1.5cm]{geometry}
+
+\title{AN2DL Reports Template}
+
+\begin{document}
+    
+    \begin{figure}[H]
+        \raggedright
+        \includegraphics[scale=0.4]{polimi.png} \hfill \includegraphics[scale=0.25]{airlab.jpeg}
+    \end{figure}
+    
+    \vspace{2mm}
+    
+    \begin{center}
+        {\large \textbf{AN2DL - First Challenge Report}}\\
+        \vspace{1mm}
+        {\large \textbf{SSTM}}\\
+        \vspace{1mm}
+        {Alina Atayeva, Bence Gabor Peter, Matteo Porcaro}\\
+        {alinkat, bencegaborpeter, matteoporcaro}\\
+        {Matricola1, Matricola2, Matricola3}\\
+        \vspace{2mm}
+        \today
+    \end{center}    
+    \vspace{2mm}
+    
+    \begin{multicols}{2}
+    \small
+        
+    \section{Introduction}
+    This project addresses a \textit{multivariate time-series classification task}: classifying 160-timestep sequences of biometric data (31 joint angles + categorical features) to determine pain levels. Our objective was to identify efficient ML and neural network architectures (tree ensembles, LSTM, GRU) for optimal classification performance on limited training data.
+    
+    \section{Problem Analysis}
+    \textbf{Dataset:} 160 timesteps/sample with 31 joint angle features plus categorical body part data (\texttt{n\_legs}, \texttt{n\_hands}, \texttt{n\_eyes}) and categorical pain level survey data. \textbf{Challenges:} (1) Class imbalance (ratio $>2:1$), (2) Feature engineering for temporal data, (3) Small dataset limiting deep learning capacity. \textbf{Strategy:} Variance-based feature selection (31$\to$20 features), categorical encoding (\texttt{is\_pirate} binary flag), and balanced sampling strategies.
+
+    \section{Method}
+
+    \subsection{Preprocessing}
+    \textbf{Body part encoding:} Parsed string values to numeric counts; created \texttt{is\_pirate} binary feature. \textbf{Feature selection:} Variance thresholding selected top 20 joint features after StandardScaler normalization. \textbf{Class imbalance:} Addressed via balanced weights (trees), Focal Loss, and Label Smoothing (RNNs).
+
+    \subsection{Models}
+    
+    \textbf{Tree Ensemble:} Soft voting over Random Forest (300 trees), Extra Trees (300 trees), Histogram Gradient Boosting (300 iter, $\eta=0.05$), all with balanced weights. Features: temporal aggregation ($\mu$, $\sigma$, min, max) over 100 timesteps, creating $20 \times 4 = 80$ features.
+    
+    \textbf{BiLSTM/BiGRU:} Bidirectional RNNs on raw sequential data (100$\times$20). Classification via:
+    \begin{equation}
+        \hat{\mathbf{y}} = \text{softmax}(\mathbf{W}[\mathbf{h}_T^{\rightarrow}; \mathbf{h}_0^{\leftarrow}] + \mathbf{b})
+    \end{equation}
+    
+    \textbf{Loss functions:} Cross-Entropy with balanced weights, Focal Loss ($\alpha=1$, $\gamma=2$), Label Smoothing ($\epsilon=0.1$).
+    
+    \textbf{Optimization:} Adam/AdamW/SGD/RMSprop with dropout $\in[0.2,0.5]$, weight decay $\sim\text{LogUniform}(10^{-6}, 10^{-3})$, early stopping (patience=10).
+
+    \subsection{Hyperparameter Optimization}
+    Optuna with Tree-structured Parzen Estimator (TPE) over 50 trials optimized: architecture (LSTM/GRU, 1-3 layers, 64-256 hidden units), regularization (dropout, weight decay), learning rate, batch size, optimizer, and loss function. Maximized validation F1-Macro via 5-fold cross-validation.
+
+    \subsection{Validation}
+    \textbf{Trees:} GroupKFold (K=5) grouped by \texttt{sample\_index}. \textbf{RNNs:} Stratified 80:20 split. Primary metric: F1-Macro (class imbalance).
+
+    \section{Experiments}
+    
+    We conducted systematic experiments progressing from ensemble methods to deep learning architectures.
+    
+    \subsection{Initial Experiments}
+    \textbf{Tree Ensemble (preliminary):} GroupKFold CV (K=5) on temporal aggregations achieved F1-Macro: 0.778. \textbf{BiLSTM/BiGRU (preliminary):} Optuna-optimized RNNs on raw sequences reached F1-Macro: 0.716-0.713 on single 80:20 split. Limited data constrained deep learning.
+    
+    \subsection{CNN Architectures}
+    Shifted to 1D/2D CNNs for better parameter efficiency: \textbf{SimplePirateCNN (1-block):} Single Conv1D layer (64 filters, k=7), AdaptiveAvgPool, dropout=0.5, RMSprop, Label Smoothing, batch=16. 5-fold CV: F1-Macro \textbf{0.848 ± 0.027}. \textbf{PirateCNN (2-block):} Two Conv1D layers (64$\to$128 filters), Focal Loss ($\gamma$=2), RMSprop, dropout=0.5, L2=$10^{-4}$, batch=16. 5-fold CV: F1-Macro \textbf{0.932 ± 0.019}.
+    
+    \subsection{CNN-LSTM Hybrid with Attention}
+    Final architecture combines hierarchical feature learning with temporal modeling: \textbf{Input embedding} (features$\to$64-dim) + \textbf{learnable positional encoding} (160 positions) $\to$ \textbf{2-layer Conv1D} (64$\to$128 filters, k=5) for local patterns $\to$ \textbf{2-layer BiLSTM} (hidden=64-128) for temporal dependencies $\to$ \textbf{4-head attention} with residual connection + LayerNorm $\to$ \textbf{FC classifier}. Selective normalization: only joint features (30) normalized, additional features (\texttt{is\_pirate}, time, pain\_survey) kept unnormalized. Adam optimizer, CrossEntropy loss, early stopping (patience=20), batch=32. Architecture validated through grid search over 32 configurations with 5-fold CV.
+
+    % Performance Table
+    \begin{table}[H]
+    \centering
+    \caption{Cross-Validation Performance Comparison}
+    \label{tab:perf}
+    \scriptsize
+    \setlength{\tabcolsep}{2pt}
+    \begin{tabular}{@{}lccc@{}}
+    \toprule
+    \textbf{Model} & \textbf{F1-M (5-Fold)} & \textbf{Std Dev} & \textbf{Best Fold} \\ 
+    \midrule
+    Tree (Voting) & 0.778 & -- & -- \\
+    BiLSTM (3L) & 0.716 & -- & -- \\
+    BiGRU (2L) & 0.713 & -- & -- \\
+    \midrule
+    SimpleCNN (1-block) & 0.848 & 0.027 & 0.885 \\
+    PirateCNN (2-block) & 0.932 & 0.019 & 0.954 \\
+    \textbf{CNN-LSTM+Attn} & \textbf{0.945} & \textbf{0.016} & \textbf{0.968} \\
+    \bottomrule
+    \end{tabular}
+    \vspace{1mm}
+    
+    \scriptsize \textit{F1-M=F1-Macro. Tree/RNN models: single split. CNN/Hybrid: 5-fold CV.}
+    \end{table}
+
+    % Architecture Table
+    \begin{table}[H]
+    \centering
+    \caption{CNN-LSTM+Attention Architecture (Best Model)}
+    \label{tab:arch}
+    \scriptsize
+    \setlength{\tabcolsep}{2pt}
+    \begin{tabular}{@{}llp{4.2cm}@{}}
+    \toprule
+    \textbf{Component} & \textbf{Specification} & \textbf{Details} \\ 
+    \midrule
+    Embedding & Linear & Features$\to$64-dim, + learned pos. enc. \\
+    Conv Block 1 & Conv1D & 64 filters, k=5, BN, ReLU, Drop(0.5) \\
+    Conv Block 2 & Conv1D & 128 filters, k=5, BN, ReLU, Drop(0.5) \\
+    BiLSTM & 2 layers & hidden=64-128, bidirectional \\
+    Attention & Multi-Head & 4 heads, residual + LayerNorm \\
+    Classifier & FC + Dropout & Drop=0.5, Linear(128$\to$3) \\
+    \midrule
+    Loss & CrossEntropy & Balanced class weights \\
+    Optimizer & Adam & lr=$10^{-3}$ or $10^{-4}$ \\
+    Regularization & Dropout & drop=0.4-0.5, all layers \\
+    Training & Early Stop & batch=16-32, patience=20, epochs$\leq$150 \\
+    Validation & 5-Fold CV & StratifiedKFold, selective norm \\
+    \bottomrule
+    \end{tabular}
+    \vspace{1mm}
+    
+    \scriptsize \textit{BN=BatchNorm1D, k=kernel size, FC=Fully Connected, Drop=Dropout.}
+    \end{table}
+
+    \textbf{Key findings:} CNN-LSTM+Attention achieved \textbf{F1-Macro 0.945 ± 0.016} (best fold: 0.968), representing \textbf{21.5\% improvement over trees} (0.778), \textbf{32.5\% over RNNs} (0.713), and \textbf{1.4\% over 2-block CNN} (0.932). Hybrid architecture combines CNN's local feature extraction with BiLSTM's temporal modeling and attention's adaptive focus. Multi-head attention (4 heads) identifies critical timesteps for pain classification. Learnable positional embeddings provide temporal context. Selective normalization (joints only) preserves semantic meaning of categorical features. Minimal variance (std=0.016) demonstrates exceptional generalization.
+
+    \section{Results}
+
+    \subsection{Performance Evolution}
+    
+    Our experiments progressed through four generations: (1) \textbf{Tree ensembles} achieved F1-Macro: 0.778 via temporal aggregation but discarded sequential information, (2) \textbf{RNN models} (BiLSTM/BiGRU) preserved temporal dynamics but achieved only 0.713-0.716 due to limited data ($<$700 samples) insufficient for standalone recurrent architectures, (3) \textbf{CNN architectures} achieved 0.932 F1-Macro through parameter-efficient convolutional hierarchies, (4) \textbf{CNN-LSTM+Attention hybrid} reached \textbf{0.945 F1-Macro}, demonstrating that combining CNN's local feature extraction, BiLSTM's temporal modeling, and attention mechanisms achieves optimal performance on small time-series data.
+    
+    \subsection{Hybrid Architecture Analysis}
+    
+    \textbf{Why CNN-LSTM+Attention excels:} (1) \textbf{Multi-scale feature learning}: CNN captures local temporal patterns (k=5), BiLSTM models long-range dependencies (160 steps), attention focuses on critical moments, (2) \textbf{Efficient combination}: CNN pre-processes features ($\sim$30k params), reducing BiLSTM input complexity ($\sim$70k params), total $\sim$100k params with attention ($\sim$20k), (3) \textbf{Learnable temporal context}: Positional embeddings (learned, not fixed sinusoidal) adapt to pain-specific temporal relationships, (4) \textbf{Attention mechanism}: 4-head self-attention identifies which timesteps matter most (e.g., specific motion moments indicating discomfort), (5) \textbf{Selective normalization}: Normalizing only joint features while preserving \texttt{is\_pirate}/time/survey scales maintains semantic information.
+    
+    \textbf{Architecture evolution:} SimpleCNN (F1=0.848) $\to$ PirateCNN (F1=0.932, +10\%) $\to$ CNN-LSTM+Attn (F1=0.945, +1.4\%). Hybrid adds 1.4\% absolute improvement over pure CNN by modeling both local and global temporal dynamics with adaptive focus.
+    
+    \textbf{Exceptional generalization:} 5-fold CV std=0.016 (vs CNN std=0.019), best fold=0.968 (vs CNN=0.954). Attention+residual connections prevent overfitting. Grid search (32 configs) validated architecture choices.
+
+    \section{Discussion}
+    
+    \subsection{Comparative Analysis}
+    
+    \textbf{vs Trees:} Hybrid's 21.5\% improvement (0.945 vs 0.778) shows sequential data requires temporal modeling. CNN extracts features, BiLSTM models evolution, attention identifies key moments—all lost in static aggregation.
+    
+    \textbf{vs RNNs:} Hybrid's 32.5\% improvement (0.945 vs 0.713) demonstrates CNN pre-processing crucial: reduces sequence complexity before RNN, enabling effective BiLSTM training on limited data. Standalone RNNs overfit; hybrid architecture balances capacity.
+    
+    \textbf{vs CNN:} Hybrid's 1.4\% improvement (0.945 vs 0.932) validates adding temporal modeling to spatial features. CNN captures local patterns; BiLSTM adds long-range dependencies; attention weighs timesteps. While smaller gain, represents \textbf{highest performance achieved}.
+    
+    \textbf{Optimization insights:} Adam optimizer with lr=$10^{-3}$ or $10^{-4}$ optimal for hybrid convergence. Dropout=0.4-0.5 across all layers (CNN, LSTM, attention) prevents overfitting. Early stopping (patience=20) typically triggers at 60-80 epochs. Residual connections around attention stabilize training.
+    
+    \subsection{Strengths \& Limitations}
+    
+    \textbf{Strengths:} (1) Systematic 4-stage progression validated each architectural component, (2) 5-fold CV with low variance (0.016) ensures reliable estimates, (3) Attention mechanism provides interpretability (which timesteps matter), (4) Selective normalization preserves feature semantics, (5) Grid search (32 configs) optimized hyperparameters, (6) \texttt{is\_pirate} binary feature captured categorical information compactly.
+    
+    \textbf{Limitations:} (1) Fixed sequence length (160 steps) may truncate patterns, (2) Single kernel size (k=5) vs multi-scale (3,5,7) Conv, (3) 4 attention heads fixed (not tuned), (4) No ensemble of hybrid + tree models, (5) Test set performance unknown (validation only), (6) Computational cost higher than pure CNN ($\sim$4× training time).
+    
+    \textbf{Key insights:} For small time-series classification ($<$1000 samples), CNN-LSTM hybrids with attention achieve optimal performance by combining local pattern extraction, global temporal modeling, and adaptive focus. Attention+residual connections crucial for stability. Selective normalization preserves information. Trade-off: 1.4\% F1 gain for 4× training cost vs pure CNN—justified for competition scenarios prioritizing accuracy.
+
+    \section{Conclusions}
+    We achieved \textbf{94.5\% F1-Macro} (best fold: 96.8\%) on multivariate time-series pain classification using a CNN-LSTM hybrid with 4-head attention, validated via 5-fold cross-validation. Our systematic exploration spanning trees (F1=0.778) $\to$ RNNs (F1=0.713) $\to$ CNNs (F1=0.932) $\to$ \textbf{CNN-LSTM+Attention (F1=0.945)} revealed hybrid architectures optimal for small time-series tasks. Key findings: (1) 21.5\% improvement over trees, 32.5\% over RNNs, 1.4\% over pure CNN, (2) attention mechanism identifies critical timesteps for pain classification, (3) learnable positional embeddings capture temporal context, (4) selective normalization preserves feature semantics, (5) exceptional generalization (std=0.016, range: 0.929-0.968), (6) grid search (32 configs) validated architecture. Contributions: systematic 4-stage methodology, rigorous validation demonstrating CNN-LSTM hybrids with attention offer best performance for small time-series by combining local feature extraction (CNN), global temporal modeling (BiLSTM), and adaptive focus (attention). Future work: test set evaluation, multi-scale Conv kernels, attention head tuning, model ensembles, sequence augmentation.
+
+    \end{multicols}
+\end{document}
